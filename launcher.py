@@ -174,15 +174,17 @@ def run_server(port):
     logger.info("Starting uvicorn on port %d...", port)
     try:
         import uvicorn
+        from main import app      # direct import — string "main:app" fails in frozen exe
+        logger.info("FastAPI app object imported successfully")
         uvicorn.run(
-            "main:app",
+            app,                   # pass the actual ASGI app object
             host="127.0.0.1",
             port=port,
             log_level="error",
             reload=False,          # reload MUST be False in frozen exe
         )
-    except Exception:
-        logger.exception("uvicorn.run() raised an exception")
+    except Exception as e:
+        logger.error("Uvicorn crashed: %s", e, exc_info=True)
 
 
 def wait_for_server(max_attempts=30, delay=1.0):

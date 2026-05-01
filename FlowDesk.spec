@@ -15,7 +15,7 @@ a = Analysis(
     datas=[
     ('frontend', 'frontend'),
     ('assets', 'assets'),
-    ('models/yolo26n.pt', 'models'),
+    ('yolo26n.pt', 'models'),
     (os.path.join(site_packages, 'nepali_datetime', 'data'), 'nepali_datetime/data'),
 ],
     hiddenimports=[
