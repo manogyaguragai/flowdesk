@@ -16,7 +16,8 @@ import numpy as np
 from ultralytics import YOLO
 
 # Base path for model files — set by launcher.py, falls back to current dir
-_MODEL_BASE = os.environ.get("FLOWDESK_BASE", ".")
+_BASE = os.environ.get("FLOWDESK_BASE", ".")
+_MODEL_BASE = os.path.join(_BASE, "models")
 
 # Available YOLO models — user can switch between these at runtime.
 # Each auto-downloads on first use (~6MB to ~130MB depending on size).

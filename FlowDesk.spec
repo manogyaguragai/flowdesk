@@ -12,7 +12,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('frontend', 'frontend'),
-        ('yolo26n.pt', '.'),
+        ('models/yolo26n.pt', 'models'),
     ],
     hiddenimports=[
         'ultralytics',
