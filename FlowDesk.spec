@@ -5,15 +5,18 @@ FlowDesk.spec — PyInstaller spec for building FlowDesk.exe
 Build with:  pyinstaller FlowDesk.spec --clean --noconfirm
 Output:      dist/FlowDesk.exe  (single-file, no console window)
 """
+import os, sys
+site_packages = os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages')
 
 a = Analysis(
     ['launcher.py'],
     pathex=['.'],
     binaries=[],
     datas=[
-        ('frontend', 'frontend'),
-        ('models/yolo26n.pt', 'models'),
-    ],
+    ('frontend', 'frontend'),
+    ('models/yolo26n.pt', 'models'),
+    (os.path.join(site_packages, 'nepali_datetime', 'data'), 'nepali_datetime/data'),
+],
     hiddenimports=[
         'ultralytics',
         'ultralytics.nn',
