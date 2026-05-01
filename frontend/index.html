@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="FlowDesk — Real-time people counting using computer vision">
+    <title>FlowDesk</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Top Bar -->
+    <header id="topbar">
+        <h1 id="app-title">FlowDesk</h1>
+        <div id="topbar-right">
+            <div id="date-display">
+                <span id="bs-date">Loading...</span>
+                <span id="ad-date"></span>
+            </div>
+            <button id="btn-quit" type="button" title="Stop feed and shut down">⏻ Quit</button>
+        </div>
+    </header>
+
+    <!-- Settings Bar (visible only in PyWebView desktop mode) -->
+    <div id="settings-bar" style="display:none;">
+        <div id="settings-path-display">
+            <span class="settings-icon">📁</span>
+            <span id="csv-path-text">CSV saved to: loading...</span>
+        </div>
+        <div id="settings-actions">
+            <button id="btn-change-folder" type="button">Change Folder</button>
+            <span id="settings-saved-msg" class="settings-saved hidden">✓ Saved</span>
+        </div>
+    </div>
+
+    <!-- Main 3-Column Layout -->
+    <main id="dashboard">
+
+        <!-- LEFT: Counters -->
+        <aside id="panel-left">
+            <h2 class="panel-title">Live Count</h2>
+            <div class="counter-card counter-in" id="card-in">
+                <span class="counter-label">IN</span>
+                <span class="counter-value" id="count-in">0</span>
+            </div>
+            <div class="counter-card counter-out" id="card-out">
+                <span class="counter-label">OUT</span>
+                <span class="counter-value" id="count-out">0</span>
+            </div>
+            <div class="counter-card counter-net" id="card-net">
+                <span class="counter-label">Inside</span>
+                <span class="counter-value" id="count-net">0</span>
+            </div>
+
+            <!-- Direction & Line Controls -->
+            <div class="panel-section">
+                <h3 class="section-title">Counting Line</h3>
+                <div class="control-row">
+                    <span id="direction-label" class="direction-text">← IN | OUT →</span>
+                    <button id="btn-swap-direction" type="button" title="Swap IN/OUT">⇄ Swap</button>
+                </div>
+                <div class="control-row">
+                    <button id="btn-orientation" type="button" title="Toggle line orientation">│ Vertical</button>
+                </div>
+                <div class="slider-row">
+                    <label for="line-slider">Position</label>
+                    <input type="range" id="line-slider" min="5" max="95" value="50" step="1">
+                    <span id="line-position-value">50%</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CENTER: Video Feed -->
+        <section id="video-section">
+            <div id="video-container">
+                <img id="video-feed" src="/video_feed" alt="Live webcam feed">
+                <div id="model-loading-overlay" class="hidden">
+                    <div id="loading-spinner"></div>
+                    <span>Loading model...</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- RIGHT: Settings & Export -->
+        <aside id="panel-right">
+            <h2 class="panel-title">Settings</h2>
+
+            <!-- Model -->
+            <div class="panel-section">
+                <h3 class="section-title">Model</h3>
+                <select id="model-select"></select>
+            </div>
+
+            <!-- Camera -->
+            <div class="panel-section">
+                <h3 class="section-title">Camera</h3>
+                <div class="control-row">
+                    <input type="number" id="camera-input" value="0" min="0" max="10" step="1">
+                    <button id="btn-switch-camera" type="button">Switch</button>
+                </div>
+            </div>
+
+            <!-- Export -->
+            <div class="panel-section">
+                <h3 class="section-title">Export Data</h3>
+                <div class="input-group">
+                    <label for="from-date">From (BS)</label>
+                    <input type="text" id="from-date" placeholder="2081-01-01">
+                </div>
+                <div class="input-group">
+                    <label for="to-date">To (BS)</label>
+                    <input type="text" id="to-date" placeholder="2081-01-30">
+                </div>
+                <button id="btn-export" type="button">Export CSV</button>
+            </div>
+
+            <!-- Actions -->
+            <div class="panel-section">
+                <button id="btn-reset" type="button">Reset Today</button>
+            </div>
+        </aside>
+
+    </main>
+
+    <footer>
+        <p>&copy; FlowDesk — People Counting System</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

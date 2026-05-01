@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+opencv-python
+numpy
+ultralytics
+nepali-datetime
+apscheduler
+pywebview
+pillow
