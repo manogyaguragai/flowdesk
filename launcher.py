@@ -194,6 +194,7 @@ def main():
     try:
         import webview
         api = FlowDeskAPI()
+        icon_path = os.path.join(BASE_PATH, "assets", "flowdesk.ico")
         webview.create_window(
             "FlowDesk",
             f"http://localhost:{PORT}",

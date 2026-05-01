@@ -320,7 +320,10 @@ async def api_shutdown():
 
 
 # ──────────────────────────────────────────────
-# SERVE FRONTEND (must be last — catch-all mount)
+# SERVE ASSETS + FRONTEND (frontend catch-all must be last)
 # ──────────────────────────────────────────────
+_assets_dir = os.path.join(BASE_PATH, "assets")
+app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
 _frontend_dir = os.path.join(BASE_PATH, "frontend")
 app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
