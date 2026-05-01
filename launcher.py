@@ -10,11 +10,15 @@ Exposes a Python API (js_api) to the frontend for settings management:
   - get_csv_path()  → returns current CSV path string
 """
 
+import multiprocessing
+multiprocessing.freeze_support()
+
 import os
 import sys
 import json
 import time
 import socket
+import logging
 import threading
 
 # ── Determine base path (works for both dev and PyInstaller frozen) ──
@@ -29,12 +33,7 @@ os.chdir(BASE_PATH)
 # Set environment variable for detector.py to find model files
 os.environ["FLOWDESK_BASE"] = BASE_PATH
 
-# ── Suppress stdout/stderr in frozen mode (no console window) ──
-if getattr(sys, 'frozen', False):
-    sys.stdout = open(os.devnull, 'w')
-    sys.stderr = open(os.devnull, 'w')
-
-# ── Settings management ─────────────────────────────────────────
+# ── Settings / App data directory ───────────────────────────────
 
 # On Windows: %APPDATA%/FlowDesk/
 # On Linux/macOS (dev): ~/.config/FlowDesk/
@@ -47,6 +46,37 @@ else:
 os.makedirs(SETTINGS_DIR, exist_ok=True)
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
 
+# ── Logging setup ───────────────────────────────────────────────
+
+LOG_DIR = os.path.join(SETTINGS_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "startup.log")
+
+logger = logging.getLogger("flowdesk")
+logger.setLevel(logging.DEBUG)
+
+_file_handler = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s")
+)
+logger.addHandler(_file_handler)
+
+logger.info("=" * 60)
+logger.info("FlowDesk launcher starting")
+logger.info("  frozen  = %s", getattr(sys, 'frozen', False))
+logger.info("  BASE    = %s", BASE_PATH)
+logger.info("  CWD     = %s", os.getcwd())
+logger.info("  python  = %s", sys.executable)
+
+# ── Suppress stdout/stderr in frozen mode (no console window) ──
+# Done AFTER logger is configured so the file handler is not affected.
+if getattr(sys, 'frozen', False):
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
+
+
+# ── Settings management ─────────────────────────────────────────
 
 def load_settings() -> dict:
     """Load settings from disk. Returns defaults if file doesn't exist."""
@@ -121,8 +151,10 @@ def find_free_port(start=8000, end=8010):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("127.0.0.1", port))
+                logger.info("  Port %d is free — selected", port)
                 return port
             except OSError:
+                logger.debug("  Port %d in use, skipping", port)
                 continue
     raise RuntimeError(f"No free port found between {start} and {end - 1}")
 
@@ -132,27 +164,43 @@ PORT = find_free_port()
 
 # ── Server startup ──────────────────────────────────────────────
 
-def start_server():
-    """Run uvicorn in the current thread (called from a daemon thread)."""
-    import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="127.0.0.1",
-        port=PORT,
-        log_level="error",
-    )
+def run_server(port):
+    """Run uvicorn in the current thread (called from a daemon thread).
+
+    Uses reload=False which is REQUIRED for frozen PyInstaller builds —
+    the reload watcher cannot discover module files inside the bundle
+    and will silently fail to start.
+    """
+    logger.info("Starting uvicorn on port %d...", port)
+    try:
+        import uvicorn
+        uvicorn.run(
+            "main:app",
+            host="127.0.0.1",
+            port=port,
+            log_level="error",
+            reload=False,          # reload MUST be False in frozen exe
+        )
+    except Exception:
+        logger.exception("uvicorn.run() raised an exception")
 
 
-def wait_for_server(max_attempts=15, delay=1.0):
+def wait_for_server(max_attempts=30, delay=1.0):
     """Poll the server until it responds or we give up."""
     import urllib.request
-    for i in range(max_attempts):
+    url = f"http://127.0.0.1:{PORT}/api/status"
+    for i in range(1, max_attempts + 1):
+        logger.info("Polling server at %s — attempt %d", url, i)
         try:
-            req = urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/status", timeout=2)
+            req = urllib.request.urlopen(url, timeout=2)
             req.close()
+            logger.info("Server responded OK")
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("  attempt %d failed: %s", i, exc)
             time.sleep(delay)
+
+    logger.error("Server did not respond after %d attempts", max_attempts)
     return False
 
 
@@ -163,17 +211,20 @@ def main():
     settings = load_settings()
     csv_dir = settings["csv_path"]
     os.makedirs(csv_dir, exist_ok=True)
+    logger.info("CSV directory: %s", csv_dir)
 
     # Set CSV_PATH in storage module before FastAPI app is imported
     import storage
     storage.set_csv_path(os.path.join(csv_dir, "counts.csv"))
 
     # 2. Start uvicorn in a daemon thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread = threading.Thread(target=run_server, args=(PORT,), daemon=True)
     server_thread.start()
+    logger.info("Uvicorn thread started")
 
     # 3. Wait for server to become ready
     if not wait_for_server():
+        logger.error("Aborting — server never became ready")
         # Server didn't start — show error and exit
         try:
             import tkinter as tk
@@ -184,13 +235,15 @@ def main():
                 "FlowDesk",
                 "Failed to start the FlowDesk server.\n\n"
                 f"Please check that ports 8000–8010 are not all in use\n"
-                "and try again."
+                "and try again.\n\n"
+                f"Logs: {LOG_FILE}"
             )
         except Exception:
             pass
         sys.exit(1)
 
     # 4. Create PyWebView window
+    logger.info("Launching PyWebView window at http://localhost:%d", PORT)
     try:
         import webview
         api = FlowDeskAPI()
@@ -206,6 +259,7 @@ def main():
         )
         webview.start(debug=False)
     except Exception as e:
+        logger.exception("WebView error")
         error_msg = str(e).lower()
         if "webview2" in error_msg or "edge" in error_msg or "runtime" in error_msg:
             try:
@@ -227,6 +281,7 @@ def main():
             raise
 
     # 5. When window closes, exit cleanly
+    logger.info("Window closed — exiting")
     os._exit(0)
 
 
