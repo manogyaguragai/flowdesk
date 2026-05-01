@@ -6,7 +6,7 @@ Build with:  pyinstaller FlowDesk.spec --clean --noconfirm
 Output:      dist/FlowDesk.exe  (single-file, no console window)
 """
 import os, sys
-site_packages = os.path.join(os.path.dirname(sys.executable), 'Lib', 'site-packages')
+site_packages = os.path.join(os.path.dirname(sys.executable), '..', 'Lib', 'site-packages')
 
 a = Analysis(
     ['launcher.py'],
