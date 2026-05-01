@@ -1,7 +1,7 @@
 """
 launcher.py — PyWebView entry point for FlowDesk desktop app.
 
-Starts FastAPI + uvicorn on localhost:8000 in a background thread,
+Starts FastAPI + uvicorn on a free localhost port in a background thread,
 then opens a native PyWebView window pointing to the local server.
 
 Exposes a Python API (js_api) to the frontend for settings management:
@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import time
+import socket
 import threading
 
 # ── Determine base path (works for both dev and PyInstaller frozen) ──
@@ -112,6 +113,23 @@ class FlowDeskAPI:
         return settings["csv_path"]
 
 
+# ── Port discovery ──────────────────────────────────────────────
+
+def find_free_port(start=8000, end=8010):
+    """Scan for a free TCP port in [start, end). Raises RuntimeError if none found."""
+    for port in range(start, end):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found between {start} and {end - 1}")
+
+
+PORT = find_free_port()
+
+
 # ── Server startup ──────────────────────────────────────────────
 
 def start_server():
@@ -120,7 +138,7 @@ def start_server():
     uvicorn.run(
         "main:app",
         host="127.0.0.1",
-        port=8000,
+        port=PORT,
         log_level="error",
     )
 
@@ -130,7 +148,7 @@ def wait_for_server(max_attempts=15, delay=1.0):
     import urllib.request
     for i in range(max_attempts):
         try:
-            req = urllib.request.urlopen("http://127.0.0.1:8000/api/status", timeout=2)
+            req = urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/status", timeout=2)
             req.close()
             return True
         except Exception:
@@ -165,7 +183,7 @@ def main():
             messagebox.showerror(
                 "FlowDesk",
                 "Failed to start the FlowDesk server.\n\n"
-                "Please check that port 8000 is not in use\n"
+                f"Please check that ports 8000–8010 are not all in use\n"
                 "and try again."
             )
         except Exception:
@@ -178,7 +196,7 @@ def main():
         api = FlowDeskAPI()
         webview.create_window(
             "FlowDesk",
-            "http://localhost:8000",
+            f"http://localhost:{PORT}",
             width=1100,
             height=750,
             min_size=(800, 600),
