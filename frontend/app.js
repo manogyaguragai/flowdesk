@@ -27,11 +27,16 @@ const elLinePosValue    = document.getElementById("line-position-value");
 const btnQuit           = document.getElementById("btn-quit");
 const elModelSelect     = document.getElementById("model-select");
 const elLoadingOverlay  = document.getElementById("model-loading-overlay");
+const elHystToggle      = document.getElementById("hyst-toggle");
+const elHystSlider      = document.getElementById("hyst-margin-slider");
+const elHystValue       = document.getElementById("hyst-margin-value");
+const elHystSliderRow   = document.getElementById("hyst-slider-row");
 
 // ── Current state ───────────────────────────────
 let currentOrientation = "vertical";
 let currentModelName = "";
 let sliderDebounce = null;
+let hystSliderDebounce = null;
 
 
 // ── Load Models into Dropdown ───────────────────
@@ -135,6 +140,16 @@ async function fetchStatus() {
                 elModelSelect.value = data.model_name;
             }
         }
+
+        // Sync hysteresis controls (only when user isn't actively adjusting)
+        if (data.hysteresis && !hystSliderDebounce) {
+            elHystToggle.checked = data.hysteresis.enabled;
+            elHystSlider.value = data.hysteresis.margin;
+            elHystValue.textContent = data.hysteresis.margin + "px";
+            // Show/hide margin slider based on toggle state
+            elHystSliderRow.style.opacity = data.hysteresis.enabled ? "1" : "0.4";
+            elHystSlider.disabled = !data.hysteresis.enabled;
+        }
     } catch (err) {
         console.error("[FlowDesk] Status poll error:", err);
     }
@@ -222,6 +237,40 @@ elLineSlider.addEventListener("input", function () {
             console.error("[FlowDesk] Line position error:", err);
         }
         sliderDebounce = null;
+    }, 200);
+});
+
+
+// ── Hysteresis Zone Controls ────────────────────
+elHystToggle.addEventListener("change", async function () {
+    const enabled = elHystToggle.checked;
+    // Update UI immediately
+    elHystSliderRow.style.opacity = enabled ? "1" : "0.4";
+    elHystSlider.disabled = !enabled;
+
+    try {
+        await fetch("/api/hysteresis?enabled=" + enabled, { method: "POST" });
+    } catch (err) {
+        console.error("[FlowDesk] Hysteresis toggle error:", err);
+        // Revert on error
+        elHystToggle.checked = !enabled;
+        elHystSliderRow.style.opacity = !enabled ? "1" : "0.4";
+        elHystSlider.disabled = enabled;
+    }
+});
+
+elHystSlider.addEventListener("input", function () {
+    elHystValue.textContent = elHystSlider.value + "px";
+
+    if (hystSliderDebounce) clearTimeout(hystSliderDebounce);
+    hystSliderDebounce = setTimeout(async function () {
+        const margin = parseInt(elHystSlider.value, 10);
+        try {
+            await fetch("/api/hysteresis?margin=" + margin, { method: "POST" });
+        } catch (err) {
+            console.error("[FlowDesk] Hysteresis margin error:", err);
+        }
+        hystSliderDebounce = null;
     }, 200);
 });
 

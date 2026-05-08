@@ -185,6 +185,7 @@ async def api_status():
         "line_position": detector.get_line_position(),
         "model_name": detector.get_model_name(),
         "model_loading": detector.is_model_loading(),
+        "hysteresis": detector.get_hysteresis(),
     })
 
 
@@ -271,6 +272,22 @@ async def api_set_line_position(position: float = Query(..., ge=0.05, le=0.95, d
         "status": "ok",
         "line_position": detector.get_line_position(),
     })
+
+
+@app.get("/api/hysteresis")
+async def api_get_hysteresis():
+    """Return current hysteresis zone configuration."""
+    return JSONResponse(detector.get_hysteresis())
+
+
+@app.post("/api/hysteresis")
+async def api_set_hysteresis(
+    enabled: bool = Query(default=None, description="Enable/disable hysteresis zone"),
+    margin: int = Query(default=None, ge=0, le=100, description="Hysteresis margin in pixels"),
+):
+    """Configure hysteresis zone (toggle on/off, set margin)."""
+    detector.set_hysteresis(enabled=enabled, margin=margin)
+    return JSONResponse(detector.get_hysteresis())
 
 
 @app.get("/api/models")

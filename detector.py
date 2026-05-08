@@ -6,6 +6,9 @@ Runs in a background thread. Uses YOLO with built-in object tracking
 
 Supports both vertical and horizontal counting lines, configurable at runtime.
 Supports runtime model switching between YOLO variants.
+
+Crossing detection uses a side-tracking state machine with configurable
+hysteresis zone to prevent miscounts from centroid jitter near the line.
 """
 
 import os
@@ -41,6 +44,14 @@ class PeopleDetector:
     """
     Opens a webcam feed, runs YOLO person detection + tracking,
     and counts people crossing a configurable counting line.
+
+    Crossing detection uses a side-tracking state machine:
+    - Each tracked person is classified as being on the "before" or "after"
+      side of the counting line.
+    - "before" = left of vertical line / above horizontal line
+    - "after"  = right of vertical line / below horizontal line
+    - A crossing is counted when a person transitions from one side to the other.
+    - An optional hysteresis zone around the line prevents jitter-induced miscounts.
     """
 
     def __init__(self, camera_index: int = 0, counting_line_position: float = 0.5,
@@ -67,9 +78,13 @@ class PeopleDetector:
         self._count_out = 0
         self._lock = threading.Lock()
 
-        # Tracking state — stores the relevant centroid axis per track ID
-        self._prev_centroids: dict[int, float] = {}
-        self._counted_ids: set[int] = set()
+        # Tracking state — side-tracking state machine
+        # Maps track_id -> "before" | "after" (which side of the line the person is on)
+        self._track_side: dict[int, str] = {}
+
+        # Hysteresis zone — prevents jitter-induced miscounts near the line
+        self._hysteresis_enabled = True
+        self._hysteresis_margin = 30  # pixels on each side of the line
 
         # Frame buffer
         self._frame: bytes | None = None
@@ -123,7 +138,7 @@ class PeopleDetector:
         with self._lock:
             self._count_in = 0
             self._count_out = 0
-            self._counted_ids.clear()
+            self._track_side.clear()
 
     def get_frame(self) -> bytes | None:
         """Return the latest annotated frame as JPEG bytes, or None."""
@@ -151,8 +166,7 @@ class PeopleDetector:
             return
         with self._lock:
             self._orientation = orientation
-            self._prev_centroids.clear()
-            self._counted_ids.clear()
+            self._track_side.clear()
 
     def get_orientation(self) -> str:
         """Return current line orientation."""
@@ -160,12 +174,11 @@ class PeopleDetector:
             return self._orientation
 
     def set_line_position(self, position: float):
-        """Set line position (0.0–1.0). Clears counted IDs."""
+        """Set line position (0.0–1.0). Clears tracking state."""
         position = max(0.0, min(1.0, position))
         with self._lock:
             self.counting_line_position = position
-            self._prev_centroids.clear()
-            self._counted_ids.clear()
+            self._track_side.clear()
 
     def get_line_position(self) -> float:
         """Return current line position."""
@@ -199,6 +212,27 @@ class PeopleDetector:
         """Return True if a model is currently being loaded/downloaded."""
         with self._lock:
             return self._model_loading
+
+    def set_hysteresis(self, enabled: bool | None = None, margin: int | None = None):
+        """Configure hysteresis zone. Clears tracking state on change."""
+        with self._lock:
+            changed = False
+            if enabled is not None and enabled != self._hysteresis_enabled:
+                self._hysteresis_enabled = enabled
+                changed = True
+            if margin is not None and margin != self._hysteresis_margin:
+                self._hysteresis_margin = max(0, min(100, margin))
+                changed = True
+            if changed:
+                self._track_side.clear()
+
+    def get_hysteresis(self) -> dict:
+        """Return current hysteresis configuration."""
+        with self._lock:
+            return {
+                "enabled": self._hysteresis_enabled,
+                "margin": self._hysteresis_margin,
+            }
 
     @staticmethod
     def list_models() -> list[dict]:
@@ -237,8 +271,7 @@ class PeopleDetector:
                     if cap is not None:
                         cap.release()
                         cap = None
-                    self._prev_centroids.clear()
-                    self._counted_ids.clear()
+                    self._track_side.clear()
 
             # Check for model switch request
             switch_model_name = None
@@ -260,8 +293,7 @@ class PeopleDetector:
                     with self._lock:
                         self._model = new_model
                         self._current_model_name = name
-                        self._prev_centroids.clear()
-                        self._counted_ids.clear()
+                        self._track_side.clear()
                         self._model_loading = False
                     print(f"[FlowDesk] Model switched to {name}")
 
@@ -313,18 +345,22 @@ class PeopleDetector:
             orientation = self._orientation
             swapped = self._direction_swapped
             line_pos = self.counting_line_position
+            hyst_enabled = self._hysteresis_enabled
+            hyst_margin = self._hysteresis_margin
 
         # Run YOLO tracking — class 0 = "person" in COCO
         results = self._model.track(frame, classes=[0], persist=True, verbose=False)
 
         if orientation == "vertical":
             line_px = int(w * line_pos)
+            self._draw_hysteresis_zone(frame, orientation, line_px, h, w, hyst_enabled, hyst_margin)
             self._draw_vertical_line(frame, line_px, h, w, swapped)
-            self._process_crossings_vertical(frame, results, line_px, swapped)
+            self._process_crossings_vertical(frame, results, line_px, swapped, hyst_enabled, hyst_margin)
         else:
             line_px = int(h * line_pos)
+            self._draw_hysteresis_zone(frame, orientation, line_px, h, w, hyst_enabled, hyst_margin)
             self._draw_horizontal_line(frame, line_px, h, w, swapped)
-            self._process_crossings_horizontal(frame, results, line_px, swapped)
+            self._process_crossings_horizontal(frame, results, line_px, swapped, hyst_enabled, hyst_margin)
 
         return frame
 
@@ -335,12 +371,16 @@ class PeopleDetector:
             orientation = self._orientation
             swapped = self._direction_swapped
             line_pos = self.counting_line_position
+            hyst_enabled = self._hysteresis_enabled
+            hyst_margin = self._hysteresis_margin
 
         if orientation == "vertical":
             line_px = int(w * line_pos)
+            self._draw_hysteresis_zone(frame, orientation, line_px, h, w, hyst_enabled, hyst_margin)
             self._draw_vertical_line(frame, line_px, h, w, swapped)
         else:
             line_px = int(h * line_pos)
+            self._draw_hysteresis_zone(frame, orientation, line_px, h, w, hyst_enabled, hyst_margin)
             self._draw_horizontal_line(frame, line_px, h, w, swapped)
 
         # Add "Loading model..." text
@@ -349,36 +389,60 @@ class PeopleDetector:
 
         return frame
 
+    def _draw_hysteresis_zone(self, frame, orientation, line_px, h, w, enabled, margin):
+        """Draw a semi-transparent band around the counting line to visualize the hysteresis zone."""
+        if not enabled or margin <= 0:
+            return
+
+        # Create overlay for semi-transparent drawing
+        overlay = frame.copy()
+
+        if orientation == "vertical":
+            x1 = max(0, line_px - margin)
+            x2 = min(w, line_px + margin)
+            cv2.rectangle(overlay, (x1, 0), (x2, h), (0, 200, 255), -1)
+        else:
+            y1 = max(0, line_px - margin)
+            y2 = min(h, line_px + margin)
+            cv2.rectangle(overlay, (0, y1), (w, y2), (0, 200, 255), -1)
+
+        # Blend with ~20% opacity
+        cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+
     def _draw_vertical_line(self, frame, line_x, h, w, swapped):
         """Draw a vertical counting line with direction labels."""
         cv2.line(frame, (line_x, 0), (line_x, h), (0, 255, 255), 2)
 
-        left_label = "OUT" if swapped else "IN"
-        right_label = "IN" if swapped else "OUT"
-        left_color = (0, 0, 200) if swapped else (0, 200, 0)
-        right_color = (0, 200, 0) if swapped else (0, 0, 200)
+        # Labels show what happens when crossing in each direction
+        # Default (not swapped): crossing right → = IN, crossing left ← = OUT
+        right_action = "OUT" if swapped else "IN"
+        left_action = "IN" if swapped else "OUT"
+        right_color = (0, 0, 200) if swapped else (0, 200, 0)
+        left_color = (0, 200, 0) if swapped else (0, 0, 200)
 
-        cv2.putText(frame, f"<-- {left_label}", (max(line_x - 120, 5), h // 2),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, left_color, 2)
-        cv2.putText(frame, f"{right_label} -->", (line_x + 10, h // 2),
+        cv2.putText(frame, f"{right_action} -->", (line_x + 10, h // 2),
                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, right_color, 2)
+        cv2.putText(frame, f"<-- {left_action}", (max(line_x - 120, 5), h // 2),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, left_color, 2)
 
     def _draw_horizontal_line(self, frame, line_y, h, w, swapped):
         """Draw a horizontal counting line with direction labels."""
         cv2.line(frame, (0, line_y), (w, line_y), (0, 255, 255), 2)
 
-        top_label = "OUT" if swapped else "IN"
-        bottom_label = "IN" if swapped else "OUT"
-        top_color = (0, 0, 200) if swapped else (0, 200, 0)
-        bottom_color = (0, 200, 0) if swapped else (0, 0, 200)
+        # Default (not swapped): crossing down ↓ = IN, crossing up ↑ = OUT
+        down_action = "OUT" if swapped else "IN"
+        up_action = "IN" if swapped else "OUT"
+        down_color = (0, 0, 200) if swapped else (0, 200, 0)
+        up_color = (0, 200, 0) if swapped else (0, 0, 200)
 
-        cv2.putText(frame, f"^ {top_label}", (w // 2 - 30, max(line_y - 15, 20)),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, top_color, 2)
-        cv2.putText(frame, f"v {bottom_label}", (w // 2 - 30, line_y + 30),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, bottom_color, 2)
+        cv2.putText(frame, f"^ {up_action}", (w // 2 - 30, max(line_y - 15, 20)),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, up_color, 2)
+        cv2.putText(frame, f"v {down_action}", (w // 2 - 30, line_y + 30),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, down_color, 2)
 
-    def _process_crossings_vertical(self, frame, results, line_x, swapped):
-        """Process person crossings for a vertical line (track centroid X)."""
+    def _process_crossings_vertical(self, frame, results, line_x, swapped,
+                                     hyst_enabled, hyst_margin):
+        """Process person crossings for a vertical line using side-tracking state machine."""
         if not results or len(results) == 0:
             return
         result = results[0]
@@ -387,11 +451,15 @@ class PeopleDetector:
 
         boxes = result.boxes.xyxy.cpu().numpy()
         track_ids = result.boxes.id.int().cpu().tolist()
+        active_ids = set()
+
+        margin = hyst_margin if hyst_enabled else 0
 
         for box, track_id in zip(boxes, track_ids):
             x1, y1, x2, y2 = box.astype(int)
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
+            active_ids.add(track_id)
 
             # Draw bounding box and track ID
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -399,31 +467,45 @@ class PeopleDetector:
                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
 
-            if track_id in self._prev_centroids and track_id not in self._counted_ids:
-                prev = self._prev_centroids[track_id]
+            # Determine which side of the line the centroid is on
+            if cx < line_x - margin:
+                current_side = "before"   # left of line (+ margin)
+            elif cx > line_x + margin:
+                current_side = "after"    # right of line (+ margin)
+            else:
+                current_side = None       # inside hysteresis zone — hold state
 
-                # Crossed left → right
-                if prev < line_x and cx >= line_x:
+            prev_side = self._track_side.get(track_id)
+
+            # Count crossing only when side definitively changes
+            if current_side is not None and prev_side is not None and current_side != prev_side:
+                if prev_side == "before" and current_side == "after":
+                    # Crossed left → right
                     with self._lock:
                         if swapped:
                             self._count_out += 1
                         else:
                             self._count_in += 1
-                    self._counted_ids.add(track_id)
-
-                # Crossed right → left
-                elif prev > line_x and cx <= line_x:
+                elif prev_side == "after" and current_side == "before":
+                    # Crossed right → left
                     with self._lock:
                         if swapped:
                             self._count_in += 1
                         else:
                             self._count_out += 1
-                    self._counted_ids.add(track_id)
 
-            self._prev_centroids[track_id] = cx
+            # Update side tracking (only when outside hysteresis zone)
+            if current_side is not None:
+                self._track_side[track_id] = current_side
 
-    def _process_crossings_horizontal(self, frame, results, line_y, swapped):
-        """Process person crossings for a horizontal line (track centroid Y)."""
+        # Clean up stale tracks (people who left the frame)
+        stale = [tid for tid in self._track_side if tid not in active_ids]
+        for tid in stale:
+            del self._track_side[tid]
+
+    def _process_crossings_horizontal(self, frame, results, line_y, swapped,
+                                       hyst_enabled, hyst_margin):
+        """Process person crossings for a horizontal line using side-tracking state machine."""
         if not results or len(results) == 0:
             return
         result = results[0]
@@ -432,11 +514,15 @@ class PeopleDetector:
 
         boxes = result.boxes.xyxy.cpu().numpy()
         track_ids = result.boxes.id.int().cpu().tolist()
+        active_ids = set()
+
+        margin = hyst_margin if hyst_enabled else 0
 
         for box, track_id in zip(boxes, track_ids):
             x1, y1, x2, y2 = box.astype(int)
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
+            active_ids.add(track_id)
 
             # Draw bounding box and track ID
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -444,25 +530,38 @@ class PeopleDetector:
                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.circle(frame, (cx, cy), 4, (255, 0, 0), -1)
 
-            if track_id in self._prev_centroids and track_id not in self._counted_ids:
-                prev = self._prev_centroids[track_id]
+            # Determine which side of the line the centroid is on
+            if cy < line_y - margin:
+                current_side = "before"   # above line (+ margin)
+            elif cy > line_y + margin:
+                current_side = "after"    # below line (+ margin)
+            else:
+                current_side = None       # inside hysteresis zone — hold state
 
-                # Crossed top → bottom
-                if prev < line_y and cy >= line_y:
+            prev_side = self._track_side.get(track_id)
+
+            # Count crossing only when side definitively changes
+            if current_side is not None and prev_side is not None and current_side != prev_side:
+                if prev_side == "before" and current_side == "after":
+                    # Crossed top → bottom
                     with self._lock:
                         if swapped:
                             self._count_out += 1
                         else:
                             self._count_in += 1
-                    self._counted_ids.add(track_id)
-
-                # Crossed bottom → top
-                elif prev > line_y and cy <= line_y:
+                elif prev_side == "after" and current_side == "before":
+                    # Crossed bottom → top
                     with self._lock:
                         if swapped:
                             self._count_in += 1
                         else:
                             self._count_out += 1
-                    self._counted_ids.add(track_id)
 
-            self._prev_centroids[track_id] = cy
+            # Update side tracking (only when outside hysteresis zone)
+            if current_side is not None:
+                self._track_side[track_id] = current_side
+
+        # Clean up stale tracks (people who left the frame)
+        stale = [tid for tid in self._track_side if tid not in active_ids]
+        for tid in stale:
+            del self._track_side[tid]

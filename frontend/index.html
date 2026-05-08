@@ -69,6 +69,23 @@
                     <span id="line-position-value">50%</span>
                 </div>
             </div>
+
+            <!-- Hysteresis Zone Controls -->
+            <div class="panel-section">
+                <h3 class="section-title">Hysteresis Zone</h3>
+                <div class="control-row">
+                    <span class="toggle-label">Dead Zone</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="hyst-toggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="slider-row" id="hyst-slider-row">
+                    <label for="hyst-margin-slider">Margin</label>
+                    <input type="range" id="hyst-margin-slider" min="0" max="100" value="30" step="1">
+                    <span id="hyst-margin-value">30px</span>
+                </div>
+            </div>
         </aside>
 
         <!-- CENTER: Video Feed -->
